@@ -45,6 +45,7 @@ import { CodeActionKind } from '../../../../../editor/contrib/codeAction/common/
 import { ACTION_START as INLINE_CHAT_START } from '../../../inlineChat/common/inlineChat.js';
 import { IPosition } from '../../../../../editor/common/core/position.js';
 import { IMarker, IMarkerService, MarkerSeverity } from '../../../../../platform/markers/common/markers.js';
+import { IRequestService, asJson } from '../../../../../platform/request/common/request.js';
 import { ChatSetupController } from './chatSetupController.js';
 import { ChatSetupAnonymous, ChatSetupStep, IChatSetupResult } from './chatSetup.js';
 import { ChatSetup } from './chatSetupRunner.js';
@@ -59,6 +60,16 @@ const ToolsAgentContextKey = ContextKeyExpr.and(
 	ContextKeyExpr.equals(`config.${ChatConfiguration.AgentEnabled}`, true),
 	ContextKeyExpr.not(`previewFeaturesDisabled`) // Set by extension
 );
+
+interface ILocalLLMResponse {
+	readonly response?: string;
+	readonly choices?: {
+		readonly message?: {
+			readonly content?: string;
+		};
+	}[];
+}
+
 
 export class SetupAgent extends Disposable implements IChatAgentImplementation {
 
@@ -178,6 +189,7 @@ export class SetupAgent extends Disposable implements IChatAgentImplementation {
 		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@IChatEntitlementService private readonly chatEntitlementService: IChatEntitlementService,
+		@IRequestService private readonly requestService: IRequestService,
 	) {
 		super();
 	}
@@ -205,11 +217,63 @@ export class SetupAgent extends Disposable implements IChatAgentImplementation {
 				!this.chatEntitlementService.anonymous							// unless anonymous access is enabled
 			)
 		) {
+			const localUrl = this.configurationService.getValue<string>('chat.localLLM.url');
+			if (localUrl) {
+				return this.doInvokeLocalLLM(request, progress, localUrl);
+			}
+
 			return this.doInvokeWithSetup(request, progress, chatService, languageModelsService, chatWidgetService, chatAgentService, languageModelToolsService);
 		}
 
 		return this.doInvokeWithoutSetup(request, progress, chatService, languageModelsService, chatWidgetService, chatAgentService, languageModelToolsService);
 	}
+
+	private async doInvokeLocalLLM(request: IChatAgentRequest, progress: (part: IChatProgress) => void, localUrl: string): Promise<IChatAgentResult> {
+		const localModel = this.configurationService.getValue<string>('chat.localLLM.model') || 'llama3';
+
+		progress({
+			kind: 'progressMessage',
+			content: new MarkdownString(localize('callingLocalLLM', "Calling local LLM ({0})...", localModel)),
+		});
+
+		try {
+			const res = await this.requestService.request({
+				type: 'POST',
+				url: localUrl,
+				data: JSON.stringify({
+					model: localModel,
+					prompt: request.message,
+					stream: false
+				}),
+				headers: {
+					'Content-Type': 'application/json'
+				}
+			}, CancellationToken.None);
+
+			if (res.res.statusCode !== 200) {
+				throw new Error(`Local LLM returned status ${res.res.statusCode}`);
+			}
+
+			const result = await asJson<ILocalLLMResponse>(res);
+
+			const content = result?.response || result?.choices?.[0]?.message?.content || JSON.stringify(result);
+
+			progress({
+				kind: 'markdownContent',
+				content: new MarkdownString(content),
+			});
+
+		} catch (error) {
+			this.logService.error('[chat setup] Local LLM call failed', error);
+			progress({
+				kind: 'markdownContent',
+				content: new MarkdownString(localize('localLLMError', "Failed to call local LLM: {0}", toErrorMessage(error))),
+			});
+		}
+
+		return {};
+	}
+
 
 	private async doInvokeWithoutSetup(request: IChatAgentRequest, progress: (part: IChatProgress) => void, chatService: IChatService, languageModelsService: ILanguageModelsService, chatWidgetService: IChatWidgetService, chatAgentService: IChatAgentService, languageModelToolsService: ILanguageModelToolsService): Promise<IChatAgentResult> {
 		const requestModel = chatWidgetService.getWidgetBySessionResource(request.sessionResource)?.viewModel?.model.getRequests().at(-1);
