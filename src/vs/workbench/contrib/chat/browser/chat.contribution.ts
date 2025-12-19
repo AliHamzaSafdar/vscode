@@ -181,6 +181,16 @@ configurationRegistry.registerConfiguration({
 			description: nls.localize('interactiveSession.editor.lineHeight', "Controls the line height in pixels in chat codeblocks. Use 0 to compute the line height from the font size."),
 			default: 0
 		},
+		'chat.localLLM.url': {
+			type: 'string',
+			description: nls.localize('chat.localLLM.url', "The URL of the local LLM API (e.g., http://localhost:11434/api/generate for Ollama)."),
+			default: ''
+		},
+		'chat.localLLM.model': {
+			type: 'string',
+			description: nls.localize('chat.localLLM.model', "The name of the model to use with the local LLM."),
+			default: 'llama3'
+		},
 		'chat.commandCenter.enabled': {
 			type: 'boolean',
 			markdownDescription: nls.localize('chat.commandCenter.enabled', "Controls whether the command center shows a menu for actions to control chat (requires {0}).", '`#window.commandCenter#`'),
